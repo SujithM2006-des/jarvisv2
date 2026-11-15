@@ -311,7 +311,7 @@ export function listVoices(): { name: string; lang: string }[] {
  */
 export function setVoiceProfile(
   change: { voice?: string | null; offlineVoice?: string | null; rate?: number | null; pitch?: number | null } | null,
-): { voice: string; rate: number; pitch: number } | { error: string } {
+): { voice: string; offlineVoice: string; rate: number; pitch: number } | { error: string } {
   if (change === null) {
     localStorage.removeItem(PROFILE_KEY)
   } else {
@@ -339,9 +339,16 @@ export function setVoiceProfile(
       next.voice = hit ? hit.name : NATURAL + nat!.id
     }
     // Offline: only a voice installed on the PC can work.
+    // Matched loosely, like the online voice: "zira" finds "Microsoft Zira - …".
     if (change.offlineVoice === null) delete next.offlineVoice
-    else if (change.offlineVoice && speechSynthesis.getVoices().some((v) => v.name === change.offlineVoice)) {
-      next.offlineVoice = change.offlineVoice
+    else if (change.offlineVoice) {
+      const want = change.offlineVoice.toLowerCase().trim()
+      const local = speechSynthesis.getVoices().filter((v) => v.localService)
+      const hit = local.find((v) => v.name.toLowerCase() === want) ?? local.find((v) => v.name.toLowerCase().includes(want))
+      if (!hit) {
+        return { error: `No voice on this PC matches "${change.offlineVoice}". Offline voices: ${local.map((v) => v.name).join(', ')}` }
+      }
+      next.offlineVoice = hit.name
     }
     if (change.rate != null) next.rate = clamp(change.rate, 0.6, 1.8, 1)
     if (change.pitch != null) next.pitch = clamp(change.pitch, 0.5, 1.5, 1)
@@ -350,7 +357,7 @@ export function setVoiceProfile(
   cachedVoice = undefined
   const p = profile()
   const voice = isNatural(p?.voice) ? naturalLabel(p!.voice!) : (pickVoice()?.name ?? 'default')
-  return { voice, rate: p?.rate ?? SYSTEM_RATE, pitch: p?.pitch ?? 1 }
+  return { voice, offlineVoice: p?.offlineVoice ?? '', rate: p?.rate ?? SYSTEM_RATE, pitch: p?.pitch ?? 1 }
 }
 
 /** Speaking pace for the system voice. */

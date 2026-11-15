@@ -7,6 +7,7 @@ import { readdir, stat } from 'node:fs/promises'
 import { userInfo } from 'node:os'
 import { join } from 'node:path'
 import { Duplex } from 'node:stream'
+import { fallbackCall } from './browser-fallback.mjs'
 
 /**
  * JARVIS's hands on your actual browser.
@@ -597,6 +598,9 @@ async function resolveTab(given) {
  */
 function forward(name, { needsTab = true } = {}) {
   return async (args) => {
+    // No extension (Chrome closed, or the Claude extension off): do it in
+    // JARVIS's own Chrome window instead of failing (bridge/browser-fallback.mjs).
+    if (!(await findSocket())) return toResult(await fallbackCall(name, args ?? {}))
     try {
       let sent = args ?? {}
       if (needsTab) {
@@ -704,8 +708,9 @@ export function chromeServer({ allowWrites }) {
               {
                 type: 'text',
                 text:
-                  'The browser extension is not running. Chrome may be closed, ' +
-                  'or the Claude extension may be disabled.',
+                  "The Claude extension in the user's own Chrome is not running (Chrome may be closed, " +
+                  "or the extension disabled), so the browser tools work in JARVIS's own Chrome window " +
+                  "instead: everything works there, but it isn't signed in to the user's everyday sites.",
               },
             ],
           }
@@ -739,7 +744,8 @@ export function chromeServer({ allowWrites }) {
       },
       async (args) => {
         const out = await forward('navigate')(args)
-        if (out.isError) return out
+        // The own-window fallback waits for the page itself.
+        if (out.isError || !(await findSocket())) return out
         // Do not hand back until the page is really there. Everything the model
         // does next — reading it, screenshotting it, answering about it — is
         // wrong if it runs against the document this one replaced.

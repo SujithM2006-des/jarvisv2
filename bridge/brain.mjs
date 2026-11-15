@@ -214,7 +214,7 @@ export function brainsInfo() {
 export const proxyModel = (id) => `jarvis-${id}`
 
 /** Run on the local model now? */
-export const useLocal = () => currentBrain() === 'local'
+export const isLocalBrain = () => currentBrain() === 'local'
 
 /**
  * Online or not, for the voice: "local" when offline on the local model (the

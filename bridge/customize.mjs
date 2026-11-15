@@ -627,18 +627,32 @@ export function customizeServer({ ask, allowWrites }) {
       'voice_set',
       'Change your speaking voice — ONLY after the user explicitly asked to customise or change ' +
         'your voice (from a recording via voice_analyze, or plainly: "speak faster", "use a ' +
-        'female voice", "make your voice deeper"). Saved; it stays after a restart. Your next ' +
-        'sentence is spoken in the new voice, so confirm in one short line.',
+        'female voice", "speak in Tamil", "make your voice deeper"). Saved; it stays after a restart. ' +
+        'There are two voices: `voice` is used while online, `offlineVoice` with no internet. Online ' +
+        'voices (natural, two per language): Ryan and Sonia (English), Valluvar and Pallavi (Tamil), ' +
+        'Madhur and Swara (Hindi), Midhun and Sobhana (Malayalam), Mohan and Shruti (Telugu) — any ' +
+        'other natural voice by name works too — or a PC voice. Offline voices are the PC\'s own ' +
+        '(David, Mark, Zira). Your next sentence is spoken in the new voice, so confirm in one short line.',
       {
-        voice: z.string().optional().describe('Installed voice name, or part of it, e.g. "Google UK English Female". Omit to keep the current voice.'),
+        voice: z
+          .string()
+          .optional()
+          .describe('The online voice: a natural voice by name ("Pallavi", "Ryan") or a PC voice ("Zira"). Omit to keep it.'),
+        offlineVoice: z.string().optional().describe('The offline voice: a PC voice ("David", "Mark", "Zira"). Omit to keep it.'),
         rate: z.number().optional().describe('0.6–1.8; 1.0 normal.'),
         pitch: z.number().optional().describe('0.5–1.5; 1.0 normal, lower is deeper.'),
       },
-      async ({ voice, rate, pitch }) => {
+      async ({ voice, offlineVoice, rate, pitch }) => {
         try {
-          const reply = await ask('voice-set', { voice: voice ?? null, rate: rate ?? null, pitch: pitch ?? null }, 15_000)
+          const reply = await ask(
+            'voice-set',
+            { voice: voice ?? null, offlineVoice: offlineVoice ?? null, rate: rate ?? null, pitch: pitch ?? null },
+            15_000,
+          )
           if (reply?.error) return fail(reply.error)
-          return ok(`Voice set: ${reply.voice} at rate ${reply.rate}, pitch ${reply.pitch}.`)
+          return ok(
+            `Voice set: online ${reply.voice}, offline ${reply.offlineVoice || 'automatic'}, at rate ${reply.rate}, pitch ${reply.pitch}.`,
+          )
         } catch (err) {
           return fail(`Could not change the voice: ${err.message}`)
         }

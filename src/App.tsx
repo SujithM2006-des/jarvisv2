@@ -6,7 +6,7 @@ import { Ignition } from './ui/Ignition'
 import { Diagnostics } from './ui/Diagnostics'
 import { useStore } from './store'
 import { startVoice, type Voice, type VoiceMode } from './lib/voice'
-import { createSpeaker, cycleVoice, currentVoiceName, listVoices, setVoiceProfile } from './lib/tts'
+import { createSpeaker, cycleVoice, currentVoiceName, listVoices, loadNaturalVoices, setVoiceProfile } from './lib/tts'
 import { analyseVoice } from './lib/voiceprint'
 import CustomLayout from './custom/CustomLayout'
 import { LayoutBoundary } from './custom/LayoutBoundary'
@@ -706,10 +706,13 @@ export default function App() {
       return { features, suggestion, voices: listVoices() }
     })
     handleRequest('voice-set', async (msg) => {
+      // The natural voices by name ("Pallavi"), in case they were not loaded yet.
+      await loadNaturalVoices()
       const r = msg.reset
         ? setVoiceProfile(null)
         : setVoiceProfile({
             voice: (msg.voice as string | null) ?? null,
+            offlineVoice: (msg.offlineVoice as string | null) ?? undefined,
             rate: (msg.rate as number | null) ?? null,
             pitch: (msg.pitch as number | null) ?? null,
           })

@@ -71,6 +71,27 @@ async function connect() {
   return chromium.connectOverCDP(`http://127.0.0.1:${PORT}`)
 }
 
+/**
+ * JARVIS's own Chrome window, for browsing on the user's behalf when their own
+ * Chrome (the Claude extension) is not available: started if need be, and
+ * connected. The caller closes the connection (the window stays open).
+ */
+export async function ownBrowser() {
+  await ensureChrome({ show: true, url: 'about:blank' })
+  return connect()
+}
+
+/** Bring a page's window up front, un-minimised. */
+export async function showPage(page) {
+  const cdp = await page.context().newCDPSession(page).catch(() => null)
+  if (cdp) {
+    const { windowId } = await cdp.send('Browser.getWindowForTarget').catch(() => ({}))
+    if (windowId) await cdp.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }).catch(() => {})
+    await cdp.detach().catch(() => {})
+  }
+  await page.bringToFront().catch(() => {})
+}
+
 /** Open JARVIS's Gemini window for the user to sign in (a normal Chrome, so Google allows it). */
 export async function openGeminiLogin() {
   if (await up()) {
@@ -882,8 +903,11 @@ export async function chatgptLogout() {
     }).catch(() => {})
     await ctx.clearCookies({ domain: /(^|\.)(chatgpt\.com|openai\.com|oaistatic\.com|oaiusercontent\.com)$/ })
     await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
-    await page.waitForTimeout(4000)
-    return await page.evaluate(() => [...document.querySelectorAll('button, a')].some((e) => /^\s*log in\s*$/i.test(e.textContent || '')))
+    // Signed out = no session cookie left (the same test as chatgptSignedIn).
+    // Reading the page instead failed while ChatGPT was still redirecting
+    // ("Execution context was destroyed").
+    const left = (await ctx.cookies('https://chatgpt.com')).some((c) => c.name.startsWith('__Secure-next-auth.session-token'))
+    return !left
   } finally {
     await page?.close().catch(() => {})
     await b.close().catch(() => {})

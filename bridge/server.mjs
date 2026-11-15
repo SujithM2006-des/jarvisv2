@@ -33,7 +33,7 @@ import { naturalSay, naturalVoices, warmNaturalVoices } from './voices.mjs'
 
 // Ready before the first sentence: the helper starts and the list is fetched.
 warmNaturalVoices()
-import { OFFLINE_PROMPT, PROVIDERS, brainMode, brainState, brainsInfo, checkBrain, currentBrain, localEnv, markExhausted, maskedKeys, proxyModel, quickAnswer, quickCommand, saveChoice, saveKeys, setProxyCheck, useLocal } from './brain.mjs'
+import { OFFLINE_PROMPT, PROVIDERS, brainMode, brainState, brainsInfo, checkBrain, currentBrain, localEnv, markExhausted, maskedKeys, proxyModel, quickAnswer, quickCommand, saveChoice, saveKeys, setProxyCheck, isLocalBrain } from './brain.mjs'
 import { PROXY_URL, proxyIsUp, proxyKey, startProxy } from './litellm.mjs'
 import { newsPrompt, newsServer, startNews } from './news.mjs'
 import { PROMPT_CREATOR, creatorServer } from './creator.mjs'
@@ -150,6 +150,20 @@ function publishToken() {
   } catch (err) {
     console.warn(`[jarvis] could not write the bridge key: ${err.message}`)
   }
+}
+
+/** True once this bridge holds the port and its key is the one in use. */
+let ownsPort = false
+/** Rewrite the key file if it no longer holds our key; true if it was repaired. */
+function repairToken() {
+  if (!ownsPort) return false
+  try {
+    if (readFileSync(join(homedir(), '.jarvis', 'bridge-token'), 'utf8').trim() === BRIDGE_TOKEN) return false
+  } catch {
+    /* missing: write it */
+  }
+  publishToken()
+  return true
 }
 
 const MUTE_FILE = join(homedir(), '.jarvis', 'muted')
@@ -338,7 +352,7 @@ import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'no
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path'
 import { openRemote, proxyError, vetTarget, PROXY_UA } from './net.mjs'
-import { probeUrl, renderPage } from './page.mjs'
+import { renderPage } from './page.mjs'
 import {
   builtinTools,
   checkToolUse,
@@ -974,7 +988,11 @@ CUSTOMISING YOURSELF — your look and your voice (\`jarvis_custom\`):
   \`voice_analyze\` on the attached audio, then \`voice_set\` with the closest
   installed voice and the suggested rate and pitch, adjusted to anything they
   said ("a bit deeper", "British"). Plain requests — "speak slower", "use a
-  female voice" — go straight to \`voice_set\`. "Your old voice" is
+  female voice", "speak in Tamil", "use Pallavi", "when offline use Zira" —
+  go straight to \`voice_set\`: you have an online voice (natural voices in
+  English, Tamil, Hindi, Malayalam, Telugu, and more by name) and an offline
+  one (a voice on the PC). You DO control your voice: never say it is only in
+  the settings. "Your old voice" is
   \`voice_reset\`. You match a recording's style with an installed voice; you
   cannot and do not clone a real person's voice — say so plainly if asked.
 
@@ -1297,7 +1315,11 @@ const handleRequest = async (req, res) => {
   // health check stay open, the popup's live state does not.
   const command = req.method === 'POST' || req.url === '/popup/state' || req.url === '/schedule'
   if (command && !origin && !ALLOW_NO_ORIGIN && req.headers['x-jarvis-token'] !== BRIDGE_TOKEN) {
-    console.warn(`[jarvis] refused ${req.method} ${req.url}: no valid local key`)
+    // Usually the key file was overwritten (another bridge that never got the
+    // port, a test run): put ours back so the popup's next try works, instead
+    // of refusing it for the rest of the session.
+    if (repairToken()) console.warn('[jarvis] the local key file had been overwritten - restored it')
+    else console.warn(`[jarvis] refused ${req.method} ${req.url}: no valid local key`)
     res.writeHead(401, cors)
     return res.end('missing or wrong local key')
   }
@@ -1312,7 +1334,7 @@ const handleRequest = async (req, res) => {
     res.writeHead(200, { ...cors, 'content-type': 'application/json' })
     // `clients` is how many JARVIS windows are connected; the background wake
     // listener (scripts/wake_listener.py) stands down while there is one.
-    return res.end(JSON.stringify({ ok: true, tts: eleven, stt: eleven, clients: CLIENTS.size, brain: brainMode(), model: useLocal() ? brainState().model : null }))
+    return res.end(JSON.stringify({ ok: true, tts: eleven, stt: eleven, clients: CLIENTS.size, brain: brainMode(), model: isLocalBrain() ? brainState().model : null }))
   }
 
   // "Hey Jarvis" from the background wake listener (scripts/wake_listener.py),
@@ -1531,7 +1553,7 @@ const handleRequest = async (req, res) => {
     // Offline: the window's recogniser (Chrome's) cannot hear without the
     // internet, so the wake listener hears the command instead, with Vosk —
     // it beeps, listens and sends what it heard as a request.
-    if (useLocal()) {
+    if (isLocalBrain()) {
       try {
         writeFileSync(join(homedir(), '.jarvis', 'listen-now'), String(Date.now()))
       } catch {
@@ -1560,7 +1582,7 @@ const handleRequest = async (req, res) => {
   // Live readings for the HUD gauges. Cheap: the slow parts are cached.
   if (req.method === 'GET' && req.url === '/status') {
     res.writeHead(200, { ...cors, 'content-type': 'application/json', 'cache-control': 'no-store' })
-    return res.end(JSON.stringify({ ...telemetry(), brain: brainMode(), brainModel: useLocal() ? brainState().model : null }))
+    return res.end(JSON.stringify({ ...telemetry(), brain: brainMode(), brainModel: isLocalBrain() ? brainState().model : null }))
   }
 
   // The calendar: list, add and remove events (they are reminders, so they
@@ -1969,6 +1991,7 @@ server.on('error', (err) => {
 await new Promise((resolve) => server.listen(PORT, HOST, resolve))
 // This bridge owns the port: now, and only now, its key is the one to use.
 publishToken()
+ownsPort = true
 // The brain: which AI answers. Claude when the internet is up; Gemini, Groq
 // or OpenRouter (through LiteLLM) when chosen in the dropdown or when Claude's
 // limit is reached; the local Ollama model offline. Checked now and every 6 s;
@@ -2133,7 +2156,7 @@ if (!DISABLED.has('browser')) void chromeAvailable().then((ok) => {
   console.log(
     ok
       ? `[jarvis] browser control ready${ALLOW_WRITES ? '' : ' (reading only — clicking and typing need JARVIS_ALLOW_WRITES=1)'}`
-      : '[jarvis] browser control unavailable — open Chrome with the Claude extension enabled',
+      : "[jarvis] Claude extension not running — browser tools use JARVIS's own Chrome window",
   )
 })
 
@@ -2769,7 +2792,7 @@ wss.on('connection', (socket) => {
           // PC jobs (open/close an app or folder, zip, copy, move, rename, new
           // folder, volume) run straight away instead of after tens of seconds
           // on the local model. Anything else goes on to it.
-          if (useLocal()) {
+          if (isLocalBrain()) {
             let quick = quickAnswer(text) ? { say: quickAnswer(text), tool: null } : null
             if (!quick) {
               try {
