@@ -116,6 +116,14 @@ async function resolveModels(keys) {
   }
 }
 
+/**
+ * Settings the Claude side sends that some providers refuse outright even
+ * with drop_params on, because LiteLLM believes they are supported: Groq
+ * answered every request with 400 "property 'prompt_cache_key' is
+ * unsupported". Always dropped, for every provider.
+ */
+const DROP = `      additional_drop_params: ["prompt_cache_key", "safety_identifier", "service_tier"]`
+
 function writeConfig() {
   const keys = readKeys()
   const lines = ['model_list:']
@@ -138,6 +146,7 @@ function writeConfig() {
       // fail in 40 s so JARVIS can move to the next instead of hanging.
       `      timeout: 40`,
       ...(id === 'gemini' ? [`      reasoning_effort: "minimal"`] : []),
+      DROP,
     )
   }
   // Gemini's backup: when its main model is busy, the translator retries on
@@ -151,6 +160,7 @@ function writeConfig() {
       `      api_key: ${q(keys.gemini.key)}`,
       `      timeout: 40`,
       `      reasoning_effort: "minimal"`,
+      DROP,
     )
     fallbacks.push(`    - ${q(proxyModel('gemini'))}: [${q(proxyModel('gemini') + '-lite')}]`)
   }
@@ -164,6 +174,7 @@ function writeConfig() {
         `      model: ${q('openrouter/' + m)}`,
         `      api_key: ${q(keys.openrouter.key)}`,
         `      timeout: 40`,
+        DROP,
       )
       return q(name)
     })

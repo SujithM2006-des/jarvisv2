@@ -351,6 +351,25 @@ export async function quickCommand(said, run) {
 }
 
 /** The brief for the local model: short, because every word costs it time. */
+/**
+ * For a provider with a small request budget (Groq's free plan: 8,000 tokens
+ * a minute, all of it on one request). The full instructions and every tool
+ * are several times that, and Groq refused each request outright ("Request
+ * too large"), so it never answered anything.
+ */
+export const LIGHT_PROMPT = `You are running on a fast, light model right now (the user chose it, or the
+main one is at its limit), with only a few tools, so:
+- Answer briefly and clearly; a short spoken answer unless the request is
+  marked [Chat], where a written answer in markdown is fine.
+- Tools here: reminders and the calendar, memory, the time, and the news.
+- For anything these can't do (opening apps or files, web search, WhatsApp,
+  email, making videos or pictures, the browser), say in one sentence that it
+  needs the main model and that they can switch to Claude or Auto beside the
+  text box.
+- Never invent a tool result. If a tool fails, say so plainly.
+
+`
+
 export const OFFLINE_PROMPT = `You are offline right now, running on a small local model on this PC, so:
 - Answer in one or two short spoken sentences. No lists, no markdown.
 - Use a tool only when the request needs one: opening apps or folders, files,

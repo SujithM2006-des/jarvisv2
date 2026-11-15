@@ -33,7 +33,7 @@ import { naturalSay, naturalVoices, warmNaturalVoices } from './voices.mjs'
 
 // Ready before the first sentence: the helper starts and the list is fetched.
 warmNaturalVoices()
-import { OFFLINE_PROMPT, PROVIDERS, brainMode, brainState, brainsInfo, checkBrain, currentBrain, localEnv, markExhausted, maskedKeys, proxyModel, quickAnswer, quickCommand, saveChoice, saveKeys, setProxyCheck, isLocalBrain } from './brain.mjs'
+import { LIGHT_PROMPT, OFFLINE_PROMPT, PROVIDERS, brainMode, brainState, brainsInfo, checkBrain, currentBrain, localEnv, markExhausted, maskedKeys, proxyModel, quickAnswer, quickCommand, saveChoice, saveKeys, setProxyCheck, isLocalBrain } from './brain.mjs'
 import { PROXY_URL, proxyIsUp, proxyKey, startProxy } from './litellm.mjs'
 import { newsPrompt, newsServer, startNews } from './news.mjs'
 import { PROMPT_CREATOR, creatorServer } from './creator.mjs'
@@ -2043,6 +2043,13 @@ setInterval(async () => {
   )
 }, 6_000).unref() // every 6 s: offline voice needs the switch made quickly
 
+/**
+ * The tool servers a light (small-budget) model gets. Measured on Groq: with
+ * the PC tools too, one request was 5,198 tokens, and a question takes about
+ * two, over the 8,000 a minute; without them it fits.
+ */
+const LIGHT_SERVERS = ['jarvis_assistant', 'jarvis_news']
+
 /** The session's options for the brain in use. */
 function withBrain(o) {
   const id = currentBrain()
@@ -2084,6 +2091,16 @@ function withBrain(o) {
     thinking: { type: 'disabled' },
   }
   delete viaProxy.effort
+  // Groq's free plan takes at most 8,000 tokens a minute, so one request must
+  // fit in that: short instructions and only the few on-PC tools, as offline.
+  if (id === 'groq') {
+    // A retry spends the same minute's budget again: no retries.
+    viaProxy.env.CLAUDE_CODE_MAX_RETRIES = '0'
+    viaProxy.tools = []
+    viaProxy.maxTurns = 8
+    viaProxy.mcpServers = Object.fromEntries(Object.entries(o.mcpServers).filter(([k]) => LIGHT_SERVERS.includes(k)))
+    viaProxy.systemPrompt = identityPrompt() + LIGHT_PROMPT + memoryPrompt()
+  }
   return viaProxy
 }
 
@@ -2094,6 +2111,26 @@ function withBrain(o) {
 // A provider timing out (litellm.mjs gives each request 40 s) counts too: the
 // next model answering beats waiting on one that has stopped.
 const LIMIT = /usage limit|rate.?limit|\b429\b|\b529\b|quota|credit balance|insufficient_quota|resource.?exhausted|too many requests|overloaded|billing|timed? ?out|timeout|deadline exceeded/i
+/**
+ * A provider other than Claude that answered with an API error instead of an
+ * answer (a bad request, a broken model, a server error) — not a limit.
+ */
+function providerBroke(msg) {
+  return /^\s*API Error:\s*[45]\d\d\b/i.test(String(msg.result ?? '')) || (msg.subtype !== 'success' && /API Error:\s*[45]\d\d/i.test(String(msg.errors ?? '')))
+}
+/**
+ * How long to rest a provider after a refusal: what it said ("try again in
+ * 15s"), one minute for a per-minute limit, ten for an error, else half an
+ * hour (a daily or plan limit). Groq's per-minute limit used to cost it 30
+ * minutes after a single question.
+ */
+function restMinutes(msg, limit) {
+  const text = [msg.result, ...(Array.isArray(msg.errors) ? msg.errors : [msg.errors])].filter(Boolean).join(' ')
+  const wait = /try again in\s*(?:(\d+)m)?\s*([\d.]+)\s*s/i.exec(text)
+  if (wait) return Math.max(1, Math.ceil((Number(wait[1] ?? 0) * 60 + Number(wait[2])) / 60))
+  if (/per minute|\bTPM\b|\bRPM\b/i.test(text)) return 1
+  return limit ? 30 : 10
+}
 function limitHit(msg) {
   const text = [msg.result, ...(Array.isArray(msg.errors) ? msg.errors : [msg.errors])].filter(Boolean).join(' ')
   return LIMIT.test(text) && (msg.subtype !== 'success' || msg.is_error === true || /^(api error|claude ai usage limit)/i.test(String(msg.result ?? '')))
@@ -2193,7 +2230,10 @@ wss.on('connection', (socket) => {
   }
   // A request a limit cut off: asked again, now on the new brain.
   if (retryAsk) {
-    const again = retryAsk
+    // Marked as the same question asked again (on the new model): the window
+    // does not show it as a second message, and the internal [Chat] tag —
+    // which the window adds back in the chat view — is not shown either.
+    const again = `[Again] ${String(retryAsk).replace(/^\[Chat\]\s*/, '')}`
     retryAsk = null
     setTimeout(() => {
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ type: 'popup-ask', text: again }))
@@ -2665,19 +2705,29 @@ wss.on('connection', (socket) => {
               // empty text is indistinguishable from a turn that simply had
               // nothing to say — the HUD stops spinning and JARVIS stands there
               // silent. Say what happened instead.
-              if (sessionBrain && limitHit(msg) && !(cancelledAsk !== null && cancelledAsk === answering)) {
-                // Out of quota or rate-limited: rest this provider, move to the
-                // next best, and ask the same question there.
-                markExhausted(sessionBrain)
-                recordLimit(sessionBrain)
+              if (
+                sessionBrain &&
+                (limitHit(msg) || providerBroke(msg)) &&
+                !(cancelledAsk !== null && cancelledAsk === answering)
+              ) {
+                // Out of quota or rate-limited — or the provider answering with
+                // an error of its own (a raw "API Error: 400 …" used to be read
+                // out as the answer): rest it, move to the next best, and ask
+                // the same question there.
+                const limit = limitHit(msg)
+                markExhausted(sessionBrain, restMinutes(msg, limit))
+                if (limit) recordLimit(sessionBrain)
                 const next = currentBrain()
                 const from = PROVIDERS[sessionBrain]?.label ?? sessionBrain
                 const to = next ? PROVIDERS[next].label : null
+                const what = limit ? `${from}'s limit is reached` : `${from} isn't working right now`
                 const news =
                   to && next !== sessionBrain
-                    ? `${from}'s limit is reached, so I'm switching to ${to}.`
-                    : `${from}'s limit is reached, and no other model is available right now.`
-                console.log(`[jarvis] limit hit on ${sessionBrain}: ${String(msg.result ?? msg.errors ?? '').slice(0, 200)}`)
+                    ? `${what}, so I'm switching to ${to}.`
+                    : `${what}, and no other model is available right now.`
+                // Long enough to keep the provider's own numbers ("Limit 8000,
+                // Requested 9300"), which say whether it was the request's size.
+                console.log(`[jarvis] ${limit ? 'limit hit' : 'provider error'} on ${sessionBrain}: ${String(msg.result ?? msg.errors ?? '').slice(0, 600)}`)
                 sendTurn({ type: 'done', text: news })
                 if (to && next !== sessionBrain) {
                   retryAsk = lastAsk

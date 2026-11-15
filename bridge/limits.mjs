@@ -130,18 +130,14 @@ async function groq(key) {
   const tlim = Number(h('x-ratelimit-limit-tokens'))
   const tleft = Number(h('x-ratelimit-remaining-tokens'))
   const meters = []
-  if (lim) meters.push({ label: 'Requests today', pct: pct(((lim - left) / lim) * 100), detail: `${lim - left} of ${lim}`, resetsAt: resetFrom(h('x-ratelimit-reset-requests')) })
+  // No reset time: Groq's daily allowance refills gradually (its header is
+  // when the next single request comes back), and this reading is cached for
+  // ten minutes, so the time shown was soon in the past ("Resets at 11:48 AM"
+  // at 11:53).
+  if (lim) meters.push({ label: 'Requests today', pct: pct(((lim - left) / lim) * 100), detail: `${lim - left} of ${lim}` })
   if (tlim) meters.push({ label: 'Tokens this minute', pct: pct(((tlim - tleft) / tlim) * 100), detail: `${tlim - tleft} of ${tlim}` })
   if (!meters.length) throw new Error(r.ok ? 'no limit headers' : `HTTP ${r.status}`)
   return { meters, note: model }
-}
-
-/** Groq's reset is a duration ("2m59.56s", "7.66s"). */
-function resetFrom(s) {
-  if (!s) return null
-  let ms = 0
-  for (const [, n, u] of String(s).matchAll(/([\d.]+)(h|ms|m|s)/g)) ms += Number(n) * { h: 3600e3, m: 60e3, s: 1e3, ms: 1 }[u]
-  return ms ? new Date(Date.now() + ms).toISOString() : null
 }
 
 function nextUtcMidnight() {
@@ -173,5 +169,10 @@ export async function providerLimits(liveQuery) {
   await Promise.all(jobs)
   if (keys.gemini?.key) out.gemini = { meters: [], note: 'Google shares no usage figures for free keys' }
   out.local = { meters: [], note: 'Runs on this PC: no limit' }
+  // A reset time already passed says nothing true: drop it.
+  const now = Date.now()
+  for (const v of Object.values(out)) {
+    for (const m of v?.meters ?? []) if (m.resetsAt && Date.parse(m.resetsAt) < now) m.resetsAt = null
+  }
   return out
 }

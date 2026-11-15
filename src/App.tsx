@@ -214,10 +214,14 @@ export default function App() {
    */
   const sessionTurn = useRef(new Map<string, number>())
 
-  const respond = async (raw: string): Promise<void> => {
+  /** `typed`: asked in the text box (window or popup), not out loud. */
+  const respond = async (raw: string, typed = false): Promise<void> => {
     // "Retry" in the chat view: shown as the original request, asked for anew.
     const retry = /^\[Retry\]\s*/.test(raw)
-    const said = raw.replace(/^\[Retry\]\s*/, '')
+    // The bridge asking the same question again on another model (after a
+    // limit): already on screen, so not shown a second time.
+    const again = /^\[Again\]\s*/.test(raw)
+    const said = raw.replace(/^\[(Retry|Again)\]\s*/, '')
     const mine = ++turn.current
     const sid = store.getState().activeSession
     const mineHere = (sessionTurn.current.get(sid) ?? 0) + 1
@@ -235,7 +239,7 @@ export default function App() {
     s.clearPanels()
     s.clearBlades()
     s.setCaption('')
-    s.pushTurn({ id: newId(), role: 'user', text: said }, sid)
+    if (!again) s.pushTurn({ id: newId(), role: 'user', text: said }, sid)
     /**
      * The chat view: the answer is read on screen, so the model is told to
      * write it out in full (formatted), and only its opening line is spoken.
@@ -357,9 +361,16 @@ export default function App() {
         music.duck(false)
         store.getState().setActiveTool(null)
         music.working(false)
-        // Stay open. Having to say his name again to add one more sentence is
-        // the difference between a conversation and a vending machine.
-        listen(FOLLOW_UP_MS)
+        // Spoken: stay open. Having to say his name again to add one more
+        // sentence is the difference between a conversation and a vending
+        // machine. Typed: back to standby — the follow-up window only heard
+        // the room, and sent whatever was said nearby as a second request.
+        if (typed) {
+          clearIdle()
+          store.getState().setPhase('dormant')
+        } else {
+          listen(FOLLOW_UP_MS)
+        }
       }
     }
   }
@@ -780,7 +791,7 @@ export default function App() {
         silence()
         interrupt()
       }
-      void respond(text)
+      void respond(text, true)
     }
     watchPopupAsk(fromDesk)
 
